@@ -14,7 +14,7 @@ PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 build_args=(--clean --syncdeps) depends_args=() repo_args=() view_args=() filter_args=()
 
 # default options
-build=1 chkver_depth=2 download=1 view=1 provides=1 graph=1 keep_going=1
+build=1 chkver_depth=2 download=1 view=1 provides=1 graph=1 keep_going=1 elevate=0
 
 # default options (disabled)
 rotate=0 update=0 repo_targets=0
@@ -101,7 +101,7 @@ opt_long=('bind:' 'bind-rw:' 'database:' 'directory:' 'ignore:' 'root:'
           'no-view' 'no-provides' 'no-build' 'rmdeps' 'sign' 'temp' 'upgrades'
           'pkgver' 'rebuild' 'rebuild-tree' 'rebuild-all' 'ignore-file:'
           'remove' 'provides-from:' 'new' 'prevent-downgrade' 'verify'
-          'makepkg-args:' 'format:' 'no-check' 'keep-going:')
+          'makepkg-args:' 'format:' 'no-check' 'keep-going:' 'elevate' 'user:')
 opt_hidden=('dump-options' 'allan' 'ignorearch' 'ignorefile:' 'noconfirm'
             'nover' 'nograph' 'nover-argv' 'noview' 'noprovides' 'nobuild'
             'rebuildall' 'rebuildtree' 'rm-deps' 'gpg-sign' 'margs:' 'nocheck'
@@ -112,7 +112,7 @@ if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
 fi
 set -- "${OPTRET[@]}"
 
-unset pkg pkg_i repo repo_p ignore_file
+unset pkg pkg_i repo repo_p ignore_file build_user
 while true; do
     case "$1" in
         # sync options
@@ -158,6 +158,10 @@ while true; do
             build_args+=(-f); chkver_depth=0; repo_targets=1 ;;
         -u|--upgrades)
             update=1 ;;
+        --elevate)
+            elevate=1 ;;
+        --user)
+            shift; build_user=$1 ;;
         # database options
         -d|--database|--repo)
             shift; repo_args+=(-d "$1") ;;
@@ -402,6 +406,21 @@ if (( view )); then
     aur view -a "$tmp"/queue "${view_args[@]}"
 fi
 
+# Run aur-build with elevated permissions (#907)
+if (( elevate )); then
+    build_args+=(--privileged --user "${build_user:-$SUDO_USER}")
+fi
+
+if (( elevate )) && (( AUR_SYNC_USE_NINJA )); then
+    sync_build_cmd() { ${AUR_PACMAN_AUTH:-sudo} env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
+elif (( elevate )); then
+    sync_build_cmd() { ${AUR_PACMAN_AUTH:-sudo} aur build "$@"; }
+elif (( AUR_SYNC_USE_NINJA )); then
+    sync_build_cmd() { env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
+else
+    sync_build_cmd() { aur build "$@"; }
+fi
+
 # Build dependency tree with ninja (#908)
 if (( AUR_SYNC_USE_NINJA )); then
     # directory for stamp files (concurrent aur-sync processes)
@@ -416,13 +435,13 @@ if (( AUR_SYNC_USE_NINJA )); then
     sort -k1b,1 -k1 -u "$tmp"/graph | aur sync--ninja "$AURDEST" >build.ninja \
         -- aur build "${build_args[@]}" -d "$db_name" --root "$db_root"
 
-    if (( build )) && NINJA_STATUS='[%s/%t] ' ninja -k "$keep_going"; then
+    if (( build )) && sync_build_cmd -k "$keep_going"; then
         # remove ninja directory on successful build
         rm -rf "$build_dir"
 
     elif (( build )); then
         # print all targets in dependency order
-        NINJA_STATUS='[%s/%t] ' ninja -nC /var/empty -f "$PWD"/build.ninja | \
+        env NINJA_STATUS='[%s/%t] ' ninja -nC /var/empty -f "$PWD"/build.ninja | \
             # [\w@\.\-\+]: valid characters for pkgname
             # alternative: [^\s]+ from rule `env -C ... > pkgbase.stamp`
             pcregrep -o1 -o3 '(\[\d+/\d+\] )(.+?)([\w@\.\-\+]+)(\.stamp)' | while read -r status pkg
@@ -441,7 +460,7 @@ if (( AUR_SYNC_USE_NINJA )); then
     fi
 
 elif (( build )); then
-    aur build "${build_args[@]}" -a "$tmp"/queue -d "$db_name" --root "$db_root"
+    sync_build_cmd "${build_args[@]}" -a "$tmp"/queue -d "$db_name" --root "$db_root"
 else
     while read -r pkg; do
         [[ $pkg ]] && printf '%s\n' "$(pwd -P)/$pkg"

@@ -116,7 +116,7 @@ opt_long=('arg-file:' 'chroot' 'database:' 'force' 'root:' 'sign' 'verify'
           'directory:' 'no-sync' 'pacman-conf:' 'remove' 'pkgver' 'rmdeps'
           'no-confirm' 'no-check' 'ignore-arch' 'log' 'new' 'makepkg-conf:' 'bind:'
           'bind-rw:' 'prevent-downgrade' 'temp' 'syncdeps' 'clean' 'namcap'
-          'checkpkg' 'user:' 'makepkg-args:' 'buildscript:' 'dry-run')
+          'checkpkg' 'user:' 'makepkg-args:' 'buildscript:' 'dry-run' 'privileged')
 opt_hidden=('dump-options' 'gpg-sign' 'ignorearch' 'noconfirm' 'nocheck' 'margs:'
             'nosync' 'repo:' 'results:' 'results-append:')
 
@@ -156,6 +156,8 @@ while true; do
             repo_args+=(--root "$1") ;;
         -S|--sign|--gpg-sign)
             sign_pkg=1; repo_add_args+=(-s) ;;
+        --privileged)
+            AUR_ASROOT=1 ;; # do not export to other tools
         # chroot options
         -D|--directory)
             shift; chroot_args+=(-D "$1") ;;
