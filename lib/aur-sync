@@ -66,6 +66,11 @@ complement() {
     grep -Fxvf "$@" || return $(( $? - 1 ))
 }
 
+run_msg() {
+    printf >&2 'Running %s\n' "${*:$1}"
+    "${@:2}"
+}
+
 trap_exit() {
     if [[ ! -v AUR_DEBUG ]]; then
         rm -rf -- "$tmp"
@@ -412,13 +417,15 @@ if (( elevate )); then
 fi
 
 if (( elevate )) && (( AUR_SYNC_USE_NINJA )); then
-    sync_build_cmd() { ${AUR_PACMAN_AUTH:-sudo} env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
+    #shellcheck disable=SC2086
+    sync_build_cmd() { run_msg 1 ${AUR_PACMAN_AUTH:-sudo} env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
 elif (( elevate )); then
-    sync_build_cmd() { ${AUR_PACMAN_AUTH:-sudo} aur build "$@"; }
+    #shellcheck disable=SC2086
+    sync_build_cmd() { run_msg 1 ${AUR_PACMAN_AUTH:-sudo} aur build "$@"; }
 elif (( AUR_SYNC_USE_NINJA )); then
-    sync_build_cmd() { env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
+    sync_build_cmd() { run_msg 1 env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
 else
-    sync_build_cmd() { aur build "$@"; }
+    sync_build_cmd() { run_msg 1 aur build "$@"; }
 fi
 
 # Build dependency tree with ninja (#908)
