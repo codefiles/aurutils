@@ -412,10 +412,6 @@ if (( view )); then
 fi
 
 # Run aur-build with elevated permissions (#907)
-if (( elevate )); then
-    build_args+=(--privileged --user "${build_user:-$SUDO_USER}")
-fi
-
 if (( elevate )) && (( AUR_SYNC_USE_NINJA )); then
     #shellcheck disable=SC2086
     sync_build_cmd() { run_msg 1 ${AUR_PACMAN_AUTH:-sudo} env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
@@ -426,6 +422,10 @@ elif (( AUR_SYNC_USE_NINJA )); then
     sync_build_cmd() { run_msg 1 env NINJA_STATUS='[%s/%t] ' ninja "$@"; }
 else
     sync_build_cmd() { run_msg 1 aur build "$@"; }
+fi
+
+if (( elevate )); then
+    build_args+=(--privileged --user "${build_user:-$USER}")
 fi
 
 # Build dependency tree with ninja (#908)
