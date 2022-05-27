@@ -1,232 +1,90 @@
-#!/bin/bash
-# aur-query - interface with AurJson
-[[ -v AUR_DEBUG ]] && set -o xtrace
-argv0=query
-AUR_LOCATION=${AUR_LOCATION:-https://aur.archlinux.org}
-AUR_QUERY_PARALLEL=${AUR_QUERY_PARALLEL:-0}
-AUR_QUERY_PARALLEL_MAX=${AUR_QUERY_PARALLEL_MAX:-15}
-AUR_QUERY_RPC=${AUR_QUERY_RPC:-$AUR_LOCATION/rpc}
-AUR_QUERY_RPC_POST=${AUR_QUERY_RPC_POST:-1}
-AUR_QUERY_RPC_SPLITNO=${AUR_QUERY_RPC_SPLITNO:-150}
-AUR_QUERY_RPC_SPLITNO_POST=${AUR_QUERY_RPC_SPLITNO_POST:-2000}
-AUR_QUERY_RPC_VERSION=${AUR_QUERY_RPC_VERSION:-5}
-PS4='+(${BASH_SOURCE}:${LINENO}):${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use v5.20;
 
-# default arguments
-curl_args=(-A aurutils -fgLsSq)
+my $argv0 = 'query';
+my @curl_args = ('-A', 'aurutils', '-fgLsSq');
 
-# Filters for generating curl configuration
-request_get() {
-    local rpc_url=$1 rpc_ver=$2 splitno=$3 type=$4 by=$5
+# environment variables
+my $aur_location = $ENV{AUR_LOCATION} // 'https://aur.archlinux.org';
+my $aur_rpc      = $ENV{AUR_QUERY_RPC} // $aur_location . "/rpc";
+my $aur_rpc_ver  = $ENV{AUR_QUERY_RPC_VERSION} // 5;
+my $aur_splitno  = $ENV{AUR_QUERY_RPC_SPLITNO} // 5000;
 
-    # Write opening and closing quotes with \x22 (hexadecimal)
-    awk -v url="$rpc_url" -v ver="$rpc_ver" -v splitno="$splitno" -v type="$type" -v by="$by" '
-    BEGIN {
-        form = sprintf("%s?v=%s&type=%s", url, ver, type)
-        if (by) 
-            form = sprintf("%s&by=%s", form, by)
-    } {
-        if ((NR-1) % splitno == 0) {
-            if (NR > 1)
-                printf "\x22\n"
-            printf "output \x22args-%s-%s\x22\n", NR-1, (NR-1)+splitno
-            printf "url \x22%s&arg[]=%s", form, $0
-        } 
-        else if (NR > 1) {
-            printf "&arg[]=%s", $0
+# https://code.activestate.com/recipes/577450-perl-url-encode-and-decode/#c6
+sub urlencode {
+    my $s = shift;
+    $s =~ s/([^A-Za-z0-9])/sprintf("%%%2.2X", ord($1))/ge;
+    return $s;
+}
+
+# option handling
+use Getopt::Long;
+my $opt_by;
+my $opt_dry_run;
+my $opt_type = "";
+
+GetOptions('t|type=s'  => \$opt_type,
+           'b|by=s'    => \$opt_by,
+           'n|dry-run' => \$opt_dry_run)
+    or exit(1);
+
+if ($opt_type eq "search" or $opt_type eq "suggest") {
+    $aur_splitno = 1;
+}
+
+# process package names from stdin or the command-line
+if (not scalar(@ARGV)) {
+    say STDERR "$argv0: at least one argument required";
+    exit(1);
+}
+if ($ARGV[0] eq "-" or $ARGV[0] eq "/dev/stdin") {
+    while (my $arg = <STDIN>) {
+        chomp($arg);
+        push(@ARGV, $arg);
+    }
+    shift(@ARGV);
+}
+
+# generate POST data
+my @forms;
+my $NR = 0;
+
+# URI/URI::QueryParam is extremely slow for large inputs. Build the form data
+# by hand and use sprintf to encode the package names.
+for my $target (@ARGV) {
+    if ($NR % $aur_splitno == 0) {
+        # Create new form element
+        push @forms, "";
+
+        # Set fields and values
+        $forms[$#forms] .= '&v='    . $aur_rpc_ver;
+        $forms[$#forms] .= '&type=' . $opt_type;
+        $forms[$#forms] .= '&by='   . $opt_by if defined($opt_by);
+    }
+    $forms[$#forms] .= '&arg[]=' . urlencode($target);
+    $NR++;
+}
+
+# Output as JSON lines
+for my $form (@forms) {
+    my @cmd = ('curl', @curl_args, $aur_rpc, '--data-raw', $form);
+
+    if ($opt_dry_run) {
+        say join(" ", map(qq/'$_'/, @cmd));
+    } else {
+        my $child_pid = open(my $fh, "-|", @cmd) or die $!;
+
+        if ($child_pid) {  # parent process
+            while (my $row = <$fh>) {
+                say $row;  # do stuff with line
+            }   
+            waitpid($child_pid, 0);
         }
-    } END {
-        if (NR != 0)
-            printf "\x22\n"
-    }'
+        # Return a generic error code on `curl` failure, to avoid overlap with
+        # codes from other tools which use pipelines (`aur-repo`, `aur-vercmp`).
+        # 2 is the same code returned if `curl` is not found in `open` above.
+        exit(2) if $?;
+    }
 }
-
-# POST requests are useful for info-type requests to circumvent limits on the
-# URL length with GET requests. The difference is that all data is now included
-# in the message body, instead of in the URI.
-request_post() {
-    local rpc_url=$1 rpc_ver=$2 splitno=$3 type=$4 by=$5
-
-    # Write opening and closing quotes with \x22 (hexadecimal)
-    awk -v url="$rpc_url" -v ver="$rpc_ver" -v splitno="$splitno" -v type="$type" -v by="$by" '{
-        if ((NR-1) % splitno == 0) {
-            if (NR > 1)
-                printf "next\n"
-            printf "output \x22args-%s-%s\x22\n", NR-1, (NR-1)+splitno
-            printf "url \x22%s\x22\n", url
-            printf "data \x22v=%s\x22\n", ver
-            printf "data \x22type=%s\x22\n", type
-            if (by)
-                printf "data \x22by=%s\x22\n", by
-        }
-        printf "data \x22arg[]=%s\x22\n", $0
-    }'
-}
-
-trap_exit() {
-    if [[ ! -v AUR_DEBUG ]]; then
-        rm -rf -- "$tmp"
-    else
-        printf >&2 'AUR_DEBUG: %s: temporary files at %s\n' "$argv0" "$tmp"
-    fi
-}
-
-usage() {
-    printf 'usage: %s -t [info|search] [-b by] [-aer] <package...>\n' "$argv0" >&2
-    exit 1
-}
-
-source /usr/share/makepkg/util/parseopts.sh
-
-opt_short='b:t:aer'
-opt_long=('by:' 'type:' 'any' 'raw' 'exit-if-empty')
-opt_hidden=('dump-options' 'dump-curl-config')
-
-if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
-    usage
-fi
-set -- "${OPTRET[@]}"
-
-unset arg_by arg_type multiple dump_curl_config exit_if_empty
-while true; do
-    case "$1" in
-        -a|--any) # set union
-            multiple=union ;;
-        -e|--exit-if-empty)
-            exit_if_empty=1 ;;
-        -r|--raw)
-            multiple=none ;;
-        -b|--by)
-            shift; arg_by=$1 ;;
-        -t|--type)
-            shift; arg_type=$1 ;;
-        --dump-curl-config)
-            dump_curl_config=1 ;;
-        --dump-options)
-            printf -- '--%s\n' "${opt_long[@]}" ${AUR_DEBUG+"${opt_hidden[@]}"}
-            printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g'
-            exit ;;
-        --) shift; break ;;
-    esac
-    shift
-done
-
-# shellcheck disable=SC2174
-mkdir -pm 0700 "${TMPDIR:-/tmp}/aurutils-$UID"
-tmp=$(mktemp -d --tmpdir "aurutils-$UID/$argv0.XXXXXXXX") || exit
-trap 'trap_exit' EXIT
-
-if (( ! $# )); then
-    usage
-fi
-
-# request parameters
-rpc=$AUR_QUERY_RPC
-ver=$AUR_QUERY_RPC_VERSION
-
-if (( AUR_QUERY_RPC_POST )); then
-    http='post'
-    splitno=$AUR_QUERY_RPC_SPLITNO_POST
-else
-    http='get'
-    splitno=$AUR_QUERY_RPC_SPLITNO
-fi
-
-# search/suggests requests require 1 argument per URI
-if [[ $arg_type == "search" ]] || [[ $arg_type = "suggest" ]]; then
-    splitno=1
-fi
-
-# generate curl configuration
-if (( $# == 1 )) && [[ $1 == "-" || $1 == "/dev/stdin" ]]; then
-    tee # noop
-else
-    printf '%s\n' "$@"
-fi | jq -R -r '@uri' | request_"$http" "$rpc" "$ver" "$splitno" "$arg_type" "${arg_by-}" >"$tmp"/config
-
-# exit cleanly on empty input (#706)
-if [[ ! -s $tmp/config ]]; then
-    exit
-fi
-
-# easy access to curl config for debugging
-if (( ${dump_curl_config-0} )); then
-    cat "$tmp"/config
-    exit
-fi
-
-# Set intersection only applies to search queries, where one search term leads
-# to multiple results. This is the default, unless --any is specified.
-multiple=${multiple:-section}
-
-# Info queries are already implicitly a union of terms (packages), unless
-# duplicate packages were specified, and are not processed further.
-if [[ $arg_type == "info" ]]; then
-    multiple=none
-
-# Suggest queries are done lexicographically, with a limit of 20 results per
-# query. The intersection is then either empty, or contains less results than
-# the query for the longest substring. Default to the union in this case.
-elif [[ $arg_type == "suggest" ]] && [[ $multiple != "none" ]]; then
-    multiple=union_flat
-fi
-
-# set operations on search output
-case $multiple in
-    section)
-        combine() { jq -Mrcs '(length - 1) as $n
-            | [map(.results | unique[]) | group_by(.)[][$n] | objects] as $r
-            | (.[0] + {
-                "resultcount": ($r | length),
-                "results": $r
-            })'
-        } ;;
-    union)
-        combine() { jq -Mrcs '([.[].results] | add | unique) as $r
-            | (.[0] + {
-                "resultcount": ($r | length),
-                "results": $r
-            })'
-        } ;;
-    union_flat)
-        combine() { jq -Mrcs 'add | unique'; } ;;
-    none)
-        combine() { jq -Mrc; } ;;
-esac
-
-# support parallel transfers (curl >7.66.0)
-if (( AUR_QUERY_PARALLEL )); then
-    # curl 7.77.0: tool_operate: don't discard failed parallel transfer result
-    curl_args+=(--parallel --parallel-max "$AUR_QUERY_PARALLEL_MAX" --fail-early)
-fi
-
-# requests are stored in a subdirectory to avoid problems from the random
-# ordering of curl --parallel output (#925)
-mkdir  "$tmp"/output
-env -C "$tmp"/output curl "${curl_args[@]}" -K "$tmp"/config || exit
-
-files=("$tmp"/output/*)
-if [[ ! -f ${files[0]} ]]; then
-    exit 1
-fi
-
-# check responses for errors (#257)
-# suggest queries accept arbitrary inputs, including the empty string
-[[ $arg_type != "suggest" ]] && for f in "${files[@]}"; do
-    f_error=$(jq -r '.error' "$f")
-
-    if [[ $f_error != 'null' ]]; then
-        jq >&2 -Mrc < "$f"
-        exit 2
-    fi
-done
-
-# abort on empty results only if requested (#929)
-if (( ${exit_if_empty-0} )); then
-    # halt_error() prints input to stderr
-    cat "${files[@]}" | combine | jq -Mrc 'if(.resultcount == 0) then halt_error(1) else . end'
-else
-    cat "${files[@]}" | combine
-fi
-
-# vim: set et sw=4 sts=4 ft=sh:
