@@ -1,0 +1,206 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+use open ":std", ":encoding(UTF-8)";
+use v5.20;
+use Cwd 'abs_path';
+use File::Basename;
+my $argv0 = 'repo-parse';
+my $aur_json;
+
+# Fallback to slower perl-based JSON parsing
+if (eval { require JSON::XS; 1 }) {
+    $aur_json = JSON::XS->new;
+} else {
+    require JSON::PP;
+    $aur_json = JSON::PP->new;
+}
+
+# Attributes which (where applicable) match AurJson, such that `aur-repo-parse --json`
+# can be piped to `aur-format`.
+my %repo_add_attributes = (
+    'ARCH'      => 'Arch',       'BASE'         => 'PackageBase',   'BUILDDATE'   => 'BuildDate',
+    'CONFLICTS' => 'Conflicts',  'CHECKDEPENDS' => 'CheckDepends',  'CSIZE'       => 'CSize',
+    'DEPENDS'   => 'Depends',    'DESC'         => 'Description',   'FILENAME'    => 'FileName',
+    'ISIZE'     => 'ISize',      'LICENSE'      => 'License',       'MAKEDEPENDS' => 'MakeDepends',
+    'MD5SUM'    => 'Md5Sum',     'NAME'         => 'Name',          'OPTDEPENDS'  => 'OptDepends',
+    'PACKAGER'  => 'Packager',   'PROVIDES'     => 'Provides',      'REPLACES'    => 'Replaces',
+    'SHA256SUM' => 'Sha256Sum',  'URL'          => 'URL',           'VERSION'     => 'Version',
+    'PGPSIG'    => 'PgpSig',     'GROUPS'       => 'Groups',        'FILES'       => 'Files'
+);
+
+my %repo_add_array = (
+    'GROUPS'  => 1, 'LICENSE'    => 1, 'REPLACES'    => 1, 'CONFLICTS'    => 1, 'PROVIDES' => 1,
+    'DEPENDS' => 1, 'OPTDEPENDS' => 1, 'MAKEDEPENDS' => 1, 'CHECKDEPENDS' => 1, 'FILES'    => 1
+);
+
+# md5sum and sha256sum are numeric values, but too large to be represented in int32/64.
+my %repo_add_numeric = (
+    'BUILDDATE' => 1, 'CSIZE' => 1, 'ISIZE' => 1
+);
+
+sub parse_db {
+    my ($fh, $db_path, $first, $handler, @varargs) = @_;
+    my $count = 0;
+    my ($entry, $filename, $attr, $attr_label);
+
+    while (my $row = <$fh>) {
+        chomp($row);
+
+        if ($row =~ /^%\Q$first\E%$/) {
+            $filename = readline($fh);
+            chomp($filename);
+
+            # Run handler on previous entry
+            $handler->($entry, $count, 0, @varargs) if ($count > 0);
+            $count++;
+
+            # New entry in the database (hashref)
+            %{$entry} = ();
+            $entry->{'Database'} = $db_path;
+            $entry->{$repo_add_attributes{$first}} = $filename;
+        }
+        elsif ($row =~ /^%.+%$/) {
+            if (not length($filename)) {
+                die "$argv0: attribute '$first' not set";
+            }
+            $attr = substr($row, 1, -1);
+            $attr_label = $repo_add_attributes{$attr};
+
+            if (not defined $attr_label) {
+                warn "$argv0: attribute '$attr' is unknown";
+                $attr_label = ucfirst(lc($attr));
+            }
+        }
+        elsif ($row eq "") {
+            next;
+        }
+        else {
+            die unless length($attr) and length($attr_label);
+
+            if (defined($repo_add_numeric{$attr})) {
+                $entry->{$attr_label} = $row + 0; # integer type
+            } elsif (defined($repo_add_array{$attr})) {
+                push(@{$entry->{$attr_label}}, $row); # array type
+            } else {
+                $entry->{$attr_label} = $row; # string type
+            }
+        }
+    }
+    # Process last entry
+    $handler->($entry, $count, 1, @varargs) if ($count > 0);
+    return $count;
+}
+
+sub repo_json {
+    my ($pkg, $count, $last) = @_;
+    my $json_text = $aur_json->encode($pkg);
+
+    print "[" if ($count == 1);
+    print "," if ($count > 1);
+
+    print $json_text;
+    print "]\n" if $last;
+}
+
+sub repo_list {
+    my ($pkg, $count, $last, $delim) = @_;
+
+    say join($delim, $pkg->{'Name'}, $pkg->{'Version'});
+}
+
+sub repo_attr {
+    my ($pkg, $count, $last, $attr) = @_;
+    my $value = $pkg->{$attr};
+
+    if (defined($value) and ref($value) eq 'ARRAY') {
+        say join("\n", @{$value});
+    } elsif (defined($value)) {
+        say $value;
+    }
+}
+
+unless (caller) {
+    use Getopt::Long;
+    my $opt_json = 0;
+    my $opt_list = 0;
+    my $opt_list_attr = 0;
+    my $opt_delim;
+    my $opt_attr = "";
+    my @opt_db_path;
+    my $opt_stdin = 0;
+
+    # optional arguments
+    GetOptions('J|json'    => \$opt_json,
+               'F|attr=s'  => \$opt_attr,
+               'l|list'    => \$opt_list,
+               'd|delim'   => \$opt_delim,
+               'list-attr' => \$opt_list_attr,
+               'p|path=s'  => \@opt_db_path)
+        or exit(1);
+
+    if (scalar(@ARGV) > 0 and ($ARGV[0] eq "-" or $ARGV[0] eq "/dev/stdin")) {
+        $opt_stdin = 1;
+    }
+    elsif ($opt_list_attr) {
+        say(join("\n", sort(values(%repo_add_attributes))));
+        exit(0);
+    }
+    elsif (scalar(@opt_db_path) < 1 and not $opt_stdin) {
+        say STDERR $argv0 . ': repository path must be specified';
+        exit(1);
+    }
+
+    # Callback function run on each entry in the database
+    my ($handler, @varargs);
+
+    if ($opt_json) {
+        $aur_json->canonical();
+        $handler = \&repo_json;
+    }
+    elsif (length($opt_attr)) {
+        $handler = \&repo_attr;
+        @varargs = $opt_attr;
+    }
+    elsif ($opt_list) {
+        $handler = \&repo_list;
+        @varargs = length($opt_delim) ? $opt_delim : "\t";
+    } else {
+        say STDERR $argv0 . ': no mode specified';
+        exit(1);
+    }
+
+    # Take input from stdin instead of a pacman database
+    if ($opt_stdin) {
+        parse_db(*STDIN, "/dev/stdin", 'FILENAME', $handler, @varargs);
+        exit(0);
+    }
+
+    # bsdtar does not support extracting multiple files in a single invocation,
+    # so fork a new process for each specified path.
+    for my $db_path (@opt_db_path) {
+        my $db_abs_path = abs_path($db_path);
+
+        if (not length($db_abs_path)) {
+            say STDERR $argv0 . ": file path '$db_path' not found";
+            exit(2);
+        }
+
+        # When parsing the database, do not require a full extraction to either memory or disk
+        # by reading `tar` output line-by-line. It is not strictly necessary to depend on
+        # attribute order (i.e. %FILENAME% occuring in first place) while doing so; however,
+        # the `--verbose` flag printing file names has different behavior for different `tar`
+        # versions. Specifically, `bsdtar -xv` does not add a newline after the file path,
+        # while `tar -xv` does.
+        my @extract = ('bsdtar', '-Oxf', $db_abs_path);
+        my $child_pid = open(my $fh, "-|", @extract) or die $!;
+
+        if ($child_pid) { # parent process
+            my $count = parse_db($fh, $db_abs_path, 'FILENAME', $handler, @varargs);
+
+            waitpid($child_pid, 0);
+        }
+        exit(2) if $?;
+    }
+}

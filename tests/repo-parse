@@ -1,0 +1,44 @@
+#!/bin/bash
+set -e
+core_path=/var/lib/pacman/sync/core.db
+core_files_path=/var/lib/pacman/sync/core.files
+
+# check repository entries are parsed correctly
+diff -q <(pacsift --repo=core | expac -S '%n\t%v' - | sort -u) \
+        <(aur repo-parse -p "$core_path" --list)
+
+# check attributes are up-to-date
+cnt1=$(bsdtar -Oxf "$core_files_path" | grep -Po '(?<=%).+(?=%)' | sort -u | wc -l) \
+cnt2=$(aur repo-parse --list-attr | wc -l)
+(( cnt1 == cnt2 ))
+
+# check if output is valid JSON
+aur repo-parse -p "$core_files_path" --json | tee core.json | jq -e >/dev/null
+
+# check if fields match aur-format
+diff -q <(aur format -F '%n\t%v\n' core.json) \
+        <(aur repo-parse -p "$core_files_path" --list)
+
+# test formatting options applicable to pacman repositories
+mapfile -t fmt_p < <(aur format --dump-format pacman)
+mapfile -t fmt_c < <(aur format --dump-format common)
+
+for f in "${fmt_p[@]}" "${fmt_c[@]}"; do
+    cnt=$(aur format core.json --format "$f\n" | awk NF | wc -l)
+    (( cnt > 0 ))
+done
+
+# option checks
+aur repo-parse || err=$?
+[[ $err == 1 ]]
+aur repo-parse -p /does/not/exist --list || err=$?
+[[ $err == 2 ]]
+
+# --json output with varying number of packages
+core_entries=('acl-*/desc' 'archlinux-keyring-*/desc')
+json_cnt1=$(bsdtar -Oxf "$core_path" "${core_entries[0]}" | aur repo-parse --json - | jq '. | length')
+[[ $json_cnt1 == 1 ]]
+json_cnt2=$(bsdtar -Oxf "$core_path" "${core_entries[@]:0:2}" | aur repo-parse --json - | jq '. | length')
+[[ $json_cnt2 == 2 ]]
+json_cnt3=$(printf '\n' | aur repo-parse --json - | jq '. | length')
+[[ -z $json_cnt3 ]]
