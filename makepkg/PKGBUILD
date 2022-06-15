@@ -11,13 +11,14 @@ changelog=aurutils.changelog
 sha256sums=('SKIP')
 conflicts=('aurutils')
 provides=("aurutils=${pkgver%%.r*}")
-depends=('git' 'jq' 'pacutils>=0.11.1' 'curl')
+depends=('git' 'pacutils>=0.11.1' 'curl')
 makedepends=('git')
 optdepends=('bash-completion: bash completion'
             'zsh: zsh completion'
             'devtools: aur-chroot'
+            'ninja: aur-sync ninja support'
             'vifm: default pager'
-            'ninja: aur-sync ninja support')
+            'perl-json-xs: faster JSON serialization')
 
 pkgver() {
     cd aurutils

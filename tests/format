@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+tests_t=(json/{ascii,depends,meta,none,empty_a,search,utf-8}.json*)
+tests_f=(json/{empty,error}.json)
+
+for t in "${tests_t[@]}"; do
+    # check if correct amount of entries were parsed
+    cnt1=$(aur format -f '%n\n' "$t" | wc -l)
+    cnt2=$(aur format --counts "$t")
+    [[ $cnt1 == $cnt2 ]]
+
+    # check if JSON output is valid
+    aur format --json "$t" | jq -e >/dev/null
+
+    # check if table output is valid
+    aur format --table "$t" | datamash -W check
+done
+
+# error codes:
+# 1: option error
+# 2: file error
+# 4: invalid input
+
+# exit on invalid potion
+aur format json/ascii.json --doesnotexit || err=$?
+[[ $err == 1 ]]
+aur format json/ascii.json || err=$?
+[[ $err == 1 ]]
+
+# exit >0 if file path does not exist
+aur format -f '%n' /does/not/exist || err=$?
+[[ $err == 2 ]]
+
+# check for errors on invalid inputs
+aur format json/empty.json --json || err=$? # invalid input
+[[ $err == 4 ]]
+aur format json/error.json --json || err=$? # response error
+[[ $err == 4 ]]
+aur format json/suggests.json --table || err=$?
+[[ $err == 4 ]]
+
+# check various modes with empty stdin
+printf '' | aur format -f '%n\n'
+printf '' | aur format -f '%n\n' --sort  Name
+printf '' | aur format -f '%n\n' --union Name
+printf '' | aur format -f '%n\n' --isect Name
+printf '' | aur format --json
+printf '' | aur format --table
