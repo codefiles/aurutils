@@ -1,8 +1,8 @@
 #!/bin/bash
 
 have_optdump=('build' 'chroot' 'depends' 'fetch' 'pkglist' 'repo' 'repo-filter'
-              'query' 'search' 'srcver' 'sync' 'vercmp' 'view')
-no_optdump=('graph')
+              'search' 'srcver' 'sync' 'vercmp' 'view')
+no_optdump=('graph' 'format' 'repo-parse' 'query')
 
 default_opts() {
     local cmd corecommands=() opts=()
