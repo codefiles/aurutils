@@ -5,82 +5,7 @@ argv0=repo
 PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 
 # default options
-db_query=local table_format=0 mode=none attr=none status=0 quiet=0
-
-# default arguments
-conf_args=()
-
-db_count() {
-    bsdtar -tf "$1" | wc -l
-}
-
-db_attr() {
-    bsdtar -Oxf "$2" '*/desc' | awk -v attr="^%$1%$" '
-    $0 ~ attr {
-        while (getline && NF != 0) { print; }
-    }'
-}
-
-db_attr_list() {
-    bsdtar -Oxf "$1" '*/desc' | awk -F% '/^%.+%$/ {print $2}' | sort -u
-}
-
-db_table() {
-    bsdtar -Oxf "$3" '*/desc' | awk -v table="$1" -v quiet="$2" '
-    function print_previous(format) {
-        # Add dependency to self (packages with no dependencies)
-        printf format, pkgname, pkgname, pkgbase, pkgver
-
-        if (table) {
-            for (i in dependencies) {
-                printf format, pkgname, dependencies[i], pkgbase, pkgver
-            }
-        }
-    }
-
-    BEGIN {
-        pkgname = pkgbase = pkgver = "-"
-        delete dependencies[0]
-
-        if (table)
-            format = "%s\t%s\t%s\t%s\n"
-        else if (quiet)
-            format = "%1$s\n"
-        else
-            format = "%1$s\t%4$s\n"
-    }
-
-    /^%FILENAME%$/ && FNR > 1 {
-        print_previous(format)
-        pkgname = pkgbase = pkgver = "-"
-        delete dependencies
-    }
-
-    /^%NAME%$/ {
-        getline
-        pkgname = $1
-    }
-
-    /^%BASE%$/ {
-        getline
-        pkgbase = $1
-    }
-
-    /^%VERSION%$/ {
-        getline
-        pkgver = $1
-    }
-
-    /^%(MAKE|CHECK)?DEPENDS%$/ {
-        while (table && getline && $0 != "") {
-            dependencies[i++] = $1
-        }
-    }
-
-    END {
-        print_previous(format)
-    }'
-}
+db_query=local mode=none attr=none list_cols=1,2
 
 usage() {
     printf >&2 'usage: %s [-d repo] [-r path] [-alqtuS]\n' "$argv0"
@@ -90,17 +15,18 @@ usage() {
 source /usr/share/makepkg/util/parseopts.sh
 
 ## option parsing
-opt_short='c:d:r:F:alqtuS'
-opt_long=('config:' 'database:' 'root:' 'all' 'list' 'path' 'list-path' 'list-repo'
-          'list-attr' 'sync' 'upgrades' 'table' 'quiet' 'status-file:' 'attr:')
-opt_hidden=('dump-options' 'repo:' 'repo-list' 'path-list' 'status' 'field:')
+opt_short='c:d:f:r:F:alqtuJS'
+opt_long=('config:' 'database:' 'root:' 'all' 'list' 'list-repo' 'list-attr' 'path'
+          'list-path' 'sync' 'upgrades' 'quiet' 'attr:' 'table' 'json' 'format:')
+opt_hidden=('dump-options' 'repo:' 'repo-list' 'path-list' 'status'
+            'status-file' 'field:')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
     usage
 fi
 set -- "${OPTRET[@]}"
 
-unset mode list db_name db_root status_file pacman_conf vercmp_args attr
+unset mode conf_args db_name db_root vercmp_args attr format_str status_file
 while true; do
     case $1 in
         -d|--database|--repo)
@@ -108,33 +34,39 @@ while true; do
         -r|--root)
             shift; db_root=$1 ;;
         -c|--config)
-            shift; pacman_conf=$1 ;;
-        -l|--list)
-            mode=packages; table_format=0 ;;
-        -t|--table)
-            mode=packages; table_format=1 ;;
+            shift; conf_args+=(--config "$1") ;;
+        -q|--quiet)
+            list_cols=1; vercmp_args+=(-q) ;;
+        -S|--sync)
+            db_query=sync ;;
         -a|--all)
             mode=upgrades; vercmp_args+=(-a) ;;
         -u|--upgrades)
             mode=upgrades ;;
-        --list-attr)
-            mode=list_attr ;;
-        -q|--quiet)
-            quiet=1; vercmp_args+=(-q) ;;
-        -S|--sync)
-            db_query=sync ;;
+        -f|--format)
+            shift; mode=format; format_str=$1 ;;
+        -t|--table)
+            mode=table ;;
+        -J|--json)
+            mode=json ;;
         -F|--attr|--field)
             shift; mode=attr; attr=$1 ;;
+        -l|--list)
+            mode=list ;;
+        --list-attr)
+            mode=list_attr ;;
+        --list-path|--path-list)
+            mode=list_path ;;
+        --list-repo|--repo-list)
+            mode=list_repo ;;
         --path)
             mode=path ;;
-        --path-list|--list-path)
-            list=path ;;
-        --repo-list|--list-repo)
-            list=repo ;;
         --status)
-            status=1 ;;
+            mode=status ;;
         --status-file)
-            shift; status_file=$1 ;;
+            printf >&2 'deprecation warning: %s --status-file FILE is replaced by aur repo --status >FILE\n' "$argv0"
+            shift; status_file=$1
+            mode=status ;;
         --dump-options)
             printf -- '--%s\n' "${opt_long[@]}" ${AUR_DEBUG+"${opt_hidden[@]}"}
             printf -- '%s' "${opt_short}" | sed 's/.:\?/-&\n/g'
@@ -144,138 +76,108 @@ while true; do
     shift
 done
 
-if [[ -v pacman_conf ]]; then
-    conf_args+=(--config "$pacman_conf")
-fi
+# Retrieve local repository configuration
+declare -A conf_file_repo conf_sync_repo
 
-# assign environment variables
-: "${db_ext=$AUR_DBEXT}" "${db_name=$AUR_REPO}" "${db_root=$AUR_DBROOT}"
+while read -r section; do
+    server=$(pacconf "${conf_args[@]}" Server --repo="$section" --single)
+    prefix=${server%://*}
 
-unset conf_file_repo conf_file_serv conf_file_path server
-while read -r key _ value; do
-    case $key=$value in
-        \[*\]*)
-            section=${key:1:-1}
-            ;;
-        DBPath=*)
-            pacman_dbpath=$value
-            ;;
-        Server=file://*)
-            server=${value#file://}
-            conf_file_repo+=("$section")
-            conf_file_serv+=("$server")
-            conf_file_path+=("$server/$section.${db_ext:-db}")
-
-            if [[ $section == "$db_name" ]]; then
-                if ! [[ $db_root ]]; then
-                    db_root=$server
-                elif [[ $db_root != "$server" ]]; then
-                    printf >&2 '%s: warning: --root and pacman.conf mismatch (%s)\n' "$argv0" "$db_name"
-                fi
-            fi
-            ;;
-        Server=*://*)
-            if [[ $section == "$db_name" ]] && ! [[ $db_root ]]; then
-                db_root=$value
-            fi
-            ;;
-    esac
-done < <(pacman-conf "${conf_args[@]}")
+    if [[ $prefix == "file" ]]; then
+        conf_file_repo[$section]=${server#*://}
+    else
+        conf_sync_repo[$section]=$server
+    fi
+done < <(pacconf "${conf_args[@]}" --repo-list)
 wait $! || exit
 
-# list information on available local repositories
-case $list in
-    path|repo)
-        if ! [[ ${conf_file_repo[*]} ]]; then
-            printf >&2 '%s: no file:// repository configured\n' "$argv0"
-            exit 2
-        fi
-        ;;&
-    path)
-        realpath -- "${conf_file_path[@]}" # resolve repo-add symlink
-        exit 0
-        ;;
-    repo)
-        printf '%s\n' "${conf_file_repo[@]}"
-        exit 0
-        ;;
-esac
-
-# select local repository from pacman configuration, if no repository
-# was specified on the command-line
-if ! [[ $db_name ]]; then
-    case ${#conf_file_repo[@]} in
-        1) db_name=${conf_file_repo[0]}
-           db_root=${conf_file_serv[0]}
-           ;;
-        0) printf >&2 '%s: no file:// repository configured\n' "$argv0"
-           exit 2
-           ;;
-        *) printf >&2 '%s: repository choice is ambiguous (use -d to specify)\n' "$argv0"
-           for i in "${!conf_file_repo[@]}"; do
-               printf '%q\t%q\n' "${conf_file_repo[$i]}" "${conf_file_path[$i]}"
-           done | column -o $'\t' -t >&2
-           exit 1
-           ;;
-    esac
+# List configured local repositories
+if [[ $mode == "list_repo" ]]; then
+    printf '%s\n' "${!conf_file_repo[@]}"
+    exit 0
+elif [[ $mode == "list_path" ]]; then
+    printf '%s\n' "${conf_file_repo[@]}"
+    exit 0
 fi
 
-case $db_query in
-    local)
-        if ! [[ $db_root ]]; then
-            printf >&2 '%s: %s: repository path not found\n' "$argv0" "$db_name"
-            exit 2
-        elif [[ $db_root == *://* ]]; then
-            printf >&2 '%s: %s: object is remote (use -S to query)\n' "$argv0" "$db_root"
-            exit 66
-        elif ! [[ -d $db_root ]]; then
-            printf >&2 '%s: %s: not a directory\n' "$argv0" "$db_root"
-            exit 20
-        fi
-        db_path=$db_root/$db_name.${db_ext:-db}
-        db_path=$(realpath -- "$db_path") # resolve repo-add symlink
-        ;;
-    sync)
-        db_path=$pacman_dbpath/sync/$db_name.${db_ext:-db}
-        ;;
-esac
+# Assign environment variables
+: "${db_ext=$AUR_DBEXT}" "${db_name=$AUR_REPO}" "${db_root=$AUR_DBROOT}"
 
+# If no repository is specified on the command-line, assume we want a local
+# repository and try to disambiguate the name.
+if [[ ! $db_name ]]; then
+    if (( ${#conf_file_repo[@]} == 1 )); then
+        db_name=${!conf_file_repo[*]}
+
+    elif (( ${#conf_file_repo[@]} > 1 )); then
+        printf >&2 '%s: repository choice is ambiguous (use -d to specify)\n' "$argv0"
+
+        for repo in "${!conf_file_repo[@]}"; do
+            printf '%q\t%q\n' "$repo" "${conf_file_repo[$repo]}"
+        done | column -o $'\t' -t >&2
+        exit 1
+    else
+        printf >&2 '%s: no file:// repository configured\n' "$argv0"
+        exit 2
+    fi
+
+elif [[ $db_query == "local" ]] && [[ ${conf_sync_repo[$db_name]} ]]; then
+    printf >&2 '%s: %s: object is remote (use -S to query)\n' "$argv0" "${conf_sync_repo[$db_name]}"
+    exit 66
+fi
+
+# Default value if -d was specified, but not -r
+# XXX: will be empty for remote repository
+if [[ ! $db_root ]]; then
+    db_root=${conf_file_repo[$db_name]}
+fi
+
+# Process local database directly
+if [[ $db_query == "local" ]]; then
+    db_path=$db_root/$db_name.${db_ext:-db}
+    db_path=$(realpath -- "$db_path") # resolve repo-add symlink
+
+# Process copy (pacman --sync) of remote database
+elif [[ $db_query == "sync" ]]; then
+    pacman_dbpath=$(pacconf "${conf_args[@]}" DBPath) || exit
+    db_path=$pacman_dbpath/sync/$db_name.${db_ext:-db}
+fi
+
+# Basic checks for database
 if [[ ! -f $db_path ]]; then
-    printf >&2 '%s: %s: not a file\n' "$argv0" "$db_path"
+    printf >&2 '%s: %s: repository path not found\n' "$argv0" "$db_name"
     exit 2
-elif (( status )); then
-    printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path"
-elif [[ -v status_file ]]; then
-    printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path" >"$status_file"
-fi
-
-# empty mode, only print path
-if [[ $mode == "path" ]]; then
+elif [[ $mode == "path" ]]; then
     printf '%s\n' "$db_path"
     exit 0
-fi
-
-# do not extract an empty database (#727)
-if ! (( $(db_count "$db_path") )); then
+elif [[ $mode == "status" ]] && [[ -v status_file ]]; then
+    printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path" >"$status_file"
+    exit 0
+elif [[ $mode == "status" ]]; then
+    printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path"
     exit 0
 fi
 
-# database operations
+# Main operations
+set -o pipefail
 case $mode in
-    upgrades)
-        db_table "0" "0" "$db_path" | aur vercmp "${vercmp_args[@]}"
-        ;;
-    packages)
-        db_table "$table_format" "$quiet" "$db_path"
-        ;;
-    attr)
-        db_attr "${attr^^}" "$db_path"
-        ;;
+    list)
+        aur repo-parse -p "$db_path" --list | cut -f "$list_cols" ;;
     list_attr)
-        db_attr_list "$db_path"
-        ;;
+        aur repo-parse -p "$db_path" --list-attr ;;
+    upgrades)
+        aur repo-parse -p "$db_path" --list | aur vercmp "${vercmp_args[@]}" ;;
+    attr)
+        aur repo-parse -p "$db_path" --attr "$attr" ;;
+    json)
+        aur repo-parse -p "$db_path" --json ;;
+    format)
+        aur repo-parse -p "$db_path" --json | aur format -f "$format_str" ;;
+    table)
+        aur repo-parse -p "$db_path" --json | aur format --table ;;
     *)
-        ;;
+        printf >&2 'error: %s: no mode specified\n' "$argv0"
+        exit 1 ;;
 esac
 
 # vim: set et sw=4 sts=4 ft=sh:

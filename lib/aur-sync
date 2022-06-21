@@ -261,17 +261,17 @@ fi
 mkdir -p "$AURDEST"
 cd "$tmp"
 
-# Retrieve path to local repo (#448, #700)
-aur repo "${repo_args[@]}" --status-file=db
-{ IFS=: read -r _ db_name
-  IFS=: read -r _ db_root
-  IFS=: read -r _ db_path
-} <db
-
 if (( $# + update + repo_targets == 0 )); then
     error '%s: no targets specified' "$argv0"
     exit 1
 fi
+
+# Retrieve path to local repo (#448, #700)
+{ IFS=: read -r _ db_name
+  IFS=: read -r _ db_root
+  IFS=: read -r _ db_path
+} < <(aur repo "${repo_args[@]}" --status)
+wait "$!"
 
 if [[ -w $db_path ]]; then
     msg >&2 'Using [%s] repository' "$db_name"
@@ -297,7 +297,7 @@ fi >&2
 
 # db_info: $1 pkgname $2 pkgver
 ( set -o pipefail
-  aur repo "${repo_args[@]}" --list -d "$db_name" -r "$db_root" | select_ignores igni -
+  aur repo-parse -p "$db_path" --list | select_ignores igni -
 ) >db_info
 
 { if (( $# )); then

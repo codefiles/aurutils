@@ -21,18 +21,19 @@ trap 'rm -rf "$tmp" "$var_tmp"' EXIT # comment this if inspecting the contents
 ( flock -n 200 || exit 1
   cd "$tmp"
 
+  # Retrieve repository location
+  { IFS=: read -r _ db_name
+    IFS=: read -r _ db_root
+    IFS=: read -r _ db_path
+  } < <(aur repo --status "$@")
+  wait "$!"
+
   # 2. Retrieve targets and their dependencies from the local repository.
-  aur repo --status-file=db --table | tee db_table | \
+  aur repo-parse -p "$db_path" --table | tee db_table | \
       cut -f1,2 | grep -Fwf "$list" | tsort >db_deps
 
   # 3. Remove entries that are not in the dependency tree.
   cut -f1 db_table | grep -Fxvf db_deps | sort -u >db_removals
-
-  # Parse repository information
-  { IFS=: read -r _ db_name
-    IFS=: read -r _ db_root
-    IFS=: read -r _ db_path
-  } <db
 
   files_path=$(realpath "$db_root/$db_name".files)
 
@@ -45,7 +46,7 @@ trap 'rm -rf "$tmp" "$var_tmp"' EXIT # comment this if inspecting the contents
   xargs -a "$tmp"/db_removals -r repo-remove "${db_path##*/}"
 
   # 5. Add symlinks to built packages.
-  aur repo -d "$db_name" --root "$var_tmp" --field filename | \
+  aur repo-parse -p "$db_path" --attr FileName | \
       xargs env -C "$db_root" realpath -z | xargs -0r ln -t "$var_tmp" -s --
 
   # 6. Point the repository root in pacman.conf to the temporary directory.
@@ -57,13 +58,13 @@ trap 'rm -rf "$tmp" "$var_tmp"' EXIT # comment this if inspecting the contents
         printf '[%s]\n' "$REPLY"
 
         if [[ $REPLY == "$db_name" ]]; then
-            pacconf --raw --repo="$REPLY" --verbose SigLevel
+            pacconf --raw --repo="$REPLY" --verbose Usage SigLevel
             printf '%s\n' "Server = file://$var_tmp"
         else
-            pacconf --raw --repo="$REPLY" --verbose SigLevel Server
+            pacconf --raw --repo="$REPLY" --verbose Usage SigLevel Server
         fi
     done < <(pacconf --repo-list)
-  } > "$tmp"/pacman.conf
+  } >"$tmp"/pacman.conf
 
   # 7. Run aur-sync(1) with the new pacman configuration.
   # Adjust options to preference.
@@ -77,6 +78,6 @@ trap 'rm -rf "$tmp" "$var_tmp"' EXIT # comment this if inspecting the contents
 
   # 9. Save list with new dependency tree
   cp -v "$list" "$list".old
-  aur repo -d "$db_name" --root "$db_root" --list | cut -f1 >"$list"
+  aur repo-parse -p "$db_path" --list | cut -f1 >"$list"
 
 ) 200> /tmp/lockfile
