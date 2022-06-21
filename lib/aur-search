@@ -8,8 +8,10 @@ PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 # default options
 multiple=section search_by=name-desc sort_key=Name type=search mode=query color=auto
 
-# default arguments
-query_args=()
+usage() {
+    plain >&2 'usage: %s [-adimnqrsv] [-k key] pkgname...' "$argv0"
+    exit 1
+}
 
 hyperlink() {
     local uri=$1 mesg=$2
@@ -18,82 +20,40 @@ hyperlink() {
     printf "\e]8;;%s\e\\%b\e]8;;\e\\" "$uri" "$mesg"
 }
 
-tabulate() {
-    # It is important to have a default value for every field, or
-    # parsing of the @tsv result might break.
-    # See: https://lists.gnu.org/archive/html/help-bash/2016-05/msg00041.html
-    # For arrays, individual elements have to be checked as well.
-    # See: https://gitlab.archlinux.org/archlinux/aurweb/-/issues/332
-    jq -r --arg key "$1" '
-        def sel_join:
-            if length > 0 then
-                map(if . == "" then "-" else . end) | join(" ")
-            else
-                "-"
-            end;
-
-        [.results[]] | sort_by(.[$key])[] | [
-            .Name        // "-",
-            .PackageBase // "-",
-            .Version     // "-",
-            .Description // "-",
-            .URL         // "-",
-
-            (.Keywords | sel_join),
-            (.License  | sel_join),
-
-            .Maintainer  // "-",
-            .NumVotes    // "-",
-            .Popularity  // "-",
-            .OutOfDate   // "-",
-
-            (.FirstSubmitted | todate),
-            (.LastModified   | todate),
-            (.Depends        | sel_join),
-            (.MakeDepends    | sel_join),
-            (.CheckDepends   | sel_join),
-            (.OptDepends     | sel_join)
-        ] | @tsv'
-}
-
 info_long() {
-    local -a desc=(
-        'Name'
-        'Base'
-        'Version'
-        'Description'
-        'URL'
-        'Keywords'
-        'License'
-        'Maintainer'
-        'Votes'
-        'Popularity'
-        'Out Of Date'
-        'Submitted'
-        'Last Modified'
-        'Depends On'
-        'Makedepends'
-        'Checkdepends'
-        'Optdepends'
-    )
-    local -a info
+    local desc=('Name'  'Base' 'Version' 'Description' 'URL' 'Keywords' 'License' 'Maintainer'
+                'Votes' 'Popularity' 'Out Of Date' 'Submitted' 'Last Modified' 'Depends On'
+                'Makedepends' 'Checkdepends' 'Optdepends' 'Conflicts' 'Provides')
+    local count=0 info
 
-    while IFS=$'\t' read -r -a info; do
-        printf "$BOLD%s:$ALL_OFF\\t%s\\n" "AUR URL" "$AUR_LOCATION/packages/${info[0]}"
+    { while IFS=$'\t' read -r -a info; do
+          if (( count++ )); then
+              printf '\n'
+          fi
+          printf "$BOLD%s:$ALL_OFF\\t%s\\n" "AUR URL" "$AUR_LOCATION/packages/${info[0]}"
 
-        for i in "${!info[@]}"; do
-            printf "$BOLD%s:$ALL_OFF\\t%s\\n" "${desc[i]}" "${info[i]}"
-        done
+          for i in "${!info[@]}"; do
+              printf "$BOLD%s:$ALL_OFF\\t%s\\n" "${desc[i]}" "${info[i]}"
+          done
+      done
 
-        # column(1) ignores empty lines (package delimitation)
-        printf '%s\n' '-'
-    done
+      if (( count == 0 )); then
+          return 1
+      fi
+    } | column -Lt -s $'\t'
+
+    # Trickery to preserve $count check from while ... read subshell
+    # XXX: disregards column(1) exit status
+    return "${PIPESTATUS[0]}"
 }
 
 info_short() {
     local Name Version NumVotes Popularity Maintainer OutOfDate Description Url Link
+    local count=0
 
-    while IFS=$'\t' read -r Name _ Version Description _ _ _ Maintainer NumVotes Popularity OutOfDate _; do
+    while IFS=$'\t' read -r Name Version Description Maintainer NumVotes Popularity OutOfDate; do
+        (( count++ ))
+
         case $OutOfDate in
             -) unset OutOfDate ;;
             *) printf -v OutOfDate '(Out-of-date: %(%d %B %Y)T)' "$OutOfDate"
@@ -107,33 +67,37 @@ info_short() {
         # Unset LC_ALL to ensure it doesn't override LC_NUMERIC.
         LC_ALL='' LC_NUMERIC=C printf -v Popularity '%.2f' "$Popularity"
 
-        Url="${AUR_LOCATION}/packages/${Name}"
+        Url=${AUR_LOCATION}/packages/${Name}
         Link="$(hyperlink "$Url" "${BLUE}aur/${ALL_OFF}${BOLD}${Name}")"
 
         printf "%s ${GREEN}%s ${ALL_OFF}(+%s %s%%) ${RED}%s%s${ALL_OFF}\\n    %s\\n" \
                "$Link" "$Version" "$NumVotes" "$Popularity" "$Maintainer" "$OutOfDate" "$Description"
     done
+
+    if (( count == 0 )); then
+        return 1
+    fi
 }
 
-usage() {
-    plain >&2 'usage: %s [-adimnqrsv] [-k key] pkgname...' "$argv0"
-    exit 1
+# noop formatter which returns 1 if no lines were processed
+info_noop() {
+    awk '{ print } END { if (NR == 0) exit(1); }'
 }
 
 source /usr/share/makepkg/util/message.sh
 source /usr/share/makepkg/util/parseopts.sh
 
-opt_short='k:adimnqrsv'
-opt_long=('any' 'info' 'search' 'desc' 'maintainer' 'name' 'depends' 'verbose' 'color:'
-          'makedepends' 'optdepends' 'checkdepends' 'key:' 'short' 'table' 'json')
-opt_hidden=('dump-options' 'raw' 'json-stdin')
+opt_short='f:k:adimnqrsv'
+opt_long=('any' 'info' 'search' 'desc' 'maintainer' 'name' 'depends' 'verbose' 'color:' 'table'
+          'makedepends' 'optdepends' 'checkdepends' 'key:' 'json' 'short' 'format:')
+opt_hidden=('dump-options' 'raw' 'format-stdin')
 
 if ! parseopts "$opt_short" "${opt_long[@]}" "${opt_hidden[@]}" -- "$@"; then
     usage
 fi
 set -- "${OPTRET[@]}"
 
-unset format
+unset format format_str format_args query_args
 while true; do
     case "$1" in
         -a|--any)
@@ -164,10 +128,13 @@ while true; do
             format=long ;;
         --table)
             format=table ;;
+        -f|--format)
+            shift; format_str=$1
+            format=custom ;;
+        --format-stdin)
+            mode=stdin ;; # experimental
         -r|--raw|--json)
-            mode=json ;;
-        --json-stdin)
-            mode=json_stdin ;;
+            format=json ;;
         -k|--key)
             shift; sort_key=$1 ;;
         --dump-options)
@@ -196,7 +163,7 @@ if [[ ! -v NO_COLOR ]] && [[ ! -v AUR_DEBUG ]]; then
     fi
 fi
 
-if ! (( $# )) && ! [[ $mode == "json_stdin" ]]; then
+if ! (( $# )) && ! [[ $mode == "stdin" ]]; then
     usage
 fi
 
@@ -206,29 +173,53 @@ case $type in
     search) format=${format-short} ;;
 esac
 
-# set filters (1)
-case $format in
-     long) info() { info_long | column -ts $'\t' | sed -E 's/^-//; $d'; } ;;
-    short) info() { info_short; } ;;
-    table) info() { tee; } ;;
-esac
-
-# set filters (2)
+# intersection of results (#313)
+# XXX: set intersection key from `search_by` value
 case $multiple in
-    section) ;; # aur-query default
-      union) query_args+=('--any') ;;
+    section) format_args+=(--isect 'Name') ;;
+      union) format_args+=(--union 'Name') ;;
 esac
 
+# sort results by key
+format_args+=(-k "$sort_key")
+
+# output filters
+case $format in
+    short) 
+        format_args+=(-f '%n\t%v\t%d\t%m\t%w\t%p\t%o\n')
+        info() { info_short; } ;;
+    long) 
+        format_args+=(-f '%n\t%b\t%v\t%d\t%U\t%K\t%e\t%m\t%w\t%p\t%o\t%S\t%L\t%D\t%M\t%c\t%O\t%C\t%P\n')
+        info() { info_long; } ;;
+    custom)
+        format_args+=(-f "$format_str")
+        info() { info_noop; } ;;
+    table)
+        format_args+=(--table)
+        info() { info_noop; } ;;
+    json)
+        format_args+=(--json)
+        info() { info_noop; } ;;
+esac
+
+# input filters
 case $mode in
     query)
-        aur query -t "$type" -b "$search_by" -e "${query_args[@]}" "$@" | tabulate "$sort_key" | info
-        exit "${PIPESTATUS[0]}" ;;
-    json)
-        aur query -t "$type" -b "$search_by" -e "${query_args[@]}" "$@"
-        ;;
-    json_stdin)
-        tabulate "$sort_key" | info
-        ;;
+        gen() { aur query -t "$type" -b "$search_by" "$@"; } ;;
+    stdin)
+        gen() { tee; } ;;
 esac
+
+# pipeline
+gen "$@" | aur format "${format_args[@]}" -v | info
+pstate=("${PIPESTATUS[@]}")
+
+if (( pstate[0] )) || (( pstate[1] )); then
+    exit 2 # aur-query or aurweb response error
+
+elif (( pstate[2] )); then
+    exit 1 # no results found
+fi
+exit 0
 
 # vim: set et sw=4 sts=4 ft=sh:

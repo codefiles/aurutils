@@ -1,4 +1,5 @@
 #!/bin/bash
-aur query linux
+aur query linux | aur format -f '%n\n'
+
 # aurweb error if no type is specified
-(( $? == 2 ))
+(( $? == 4 ))

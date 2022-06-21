@@ -204,3 +204,5 @@ unless (caller) {
         exit(2) if $?;
     }
 }
+
+# vim: set et sw=4 sts=4 ft=perl:

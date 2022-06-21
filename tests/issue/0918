@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e -o pipefail
+set -o pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -14,7 +14,7 @@ printf '%s\n' >&2 "$*"
 cd "$tmp"
 
 # RPC query (set intersection)
-aur query -t search "$@" | jq -r '.results[].Name' | sort >"$tmp"/a
+aur search --format '%n\n' "$@" | sort >"$tmp"/a
 
 # Website query
 curl -s "https://aur.archlinux.org/packages?K=$(paste_args '+' "$@")" | \
