@@ -17,7 +17,7 @@ parse_loop() {
 }
 
 ret=0
-for aurcmd in "${BASH_SOURCE%/*}"/../lib/!(aur-graph|aur-sync--ninja); do
+for aurcmd in "${BASH_SOURCE%/*}"/../lib/!(aur-graph|aur-sync--ninja|aur-format|aur-repo-parse|aur-query); do
       diff --color -U0 --label "$aurcmd Options" --label "$aurcmd Loop" \
         <(bash --pretty-print -O extglob "$aurcmd" | parse_loop | sort) \
         <(AUR_DEBUG=1 command "$aurcmd" --dump-options 2>/dev/null | sort)
