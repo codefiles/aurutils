@@ -9,74 +9,98 @@ PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
 multiple=section search_by=name-desc sort_key=Name type=search mode=query color=auto
 
 usage() {
-    plain >&2 'usage: %s [-adimnqrsv] [-k key] pkgname...' "$argv0"
+    printf >&2 'usage: %s [-adimnqrsv] [-k key] pkgname...\n' "$argv0"
     exit 1
 }
 
-hyperlink() {
-    local uri=$1 mesg=$2
-
-    # Interpret escapes with %b for "dumb" terminals (#1001)
-    printf "\e]8;;%s\e\\%b\e]8;;\e\\" "$uri" "$mesg"
-}
-
+# shellcheck disable=SC2016
 info_long() {
-    local desc=('Name'  'Base' 'Version' 'Description' 'URL' 'Keywords' 'License' 'Maintainer'
-                'Votes' 'Popularity' 'Out Of Date' 'Submitted' 'Last Modified' 'Depends On'
-                'Makedepends' 'Checkdepends' 'Optdepends' 'Conflicts' 'Provides')
-    local count=0 info
+    awk -F '\t' -v URL="$AUR_LOCATION/packages" -v colorize="$1" '
+    function fmt(prefix, field) {
+        printf("%s%-15s%s %s\n", BOLD, prefix, ALL_OFF, field)
+    }
 
-    { while IFS=$'\t' read -r -a info; do
-          if (( count++ )); then
-              printf '\n'
-          fi
-          printf "$BOLD%s:$ALL_OFF\\t%s\\n" "AUR URL" "$AUR_LOCATION/packages/${info[0]}"
+    BEGIN {
+        # libmakepkg escape sequences start in \e and cannot be used here
+        if (colorize) {
+            BOLD    = "\033[1m"
+            ALL_OFF = "\033[0m"
+        } else {
+            BOLD    = ""
+            ALL_OFF = ""
+        }
+    } {
+        if (NR > 1) {
+            printf("\n")
+        }
+        printf("%s%-15s%s %s/%s\n", BOLD, "AUR URL:", ALL_OFF, URL, $1)
 
-          for i in "${!info[@]}"; do
-              printf "$BOLD%s:$ALL_OFF\\t%s\\n" "${desc[i]}" "${info[i]}"
-          done
-      done
-
-      if (( count == 0 )); then
-          return 1
-      fi
-    } | column -Lt -s $'\t'
-
-    # Trickery to preserve $count check from while ... read subshell
-    # XXX: disregards column(1) exit status
-    return "${PIPESTATUS[0]}"
+        fmt("Name:"         , $1)
+        fmt("Base:"         , $2)
+        fmt("Version:"      , $3)
+        fmt("Description:"  , $4)
+        fmt("URL:"          , $5)
+        fmt("Keywords:"     , $6)
+        fmt("Licenses:"     , $7)
+        fmt("Maintainer:"   , $8)
+        fmt("Votes:"        , $9)
+        fmt("Popularity:"   , $10)
+        fmt("Out Of Date:"  , $11)
+        fmt("Submitted:"    , $12)
+        fmt("Last Modified:", $13)
+        fmt("Depends On:"   , $14)
+        fmt("Makedepends:"  , $15)
+        fmt("Checkdepends:" , $16)
+        fmt("Optdepends:", $17)
+    }
+    END {
+        if (NR == 0)
+            exit(1)
+    }'
 }
 
+# shellcheck disable=SC2016
 info_short() {
-    local Name Version NumVotes Popularity Maintainer OutOfDate Description Url Link
-    local count=0
+    env -u LC_ALL LC_NUMERIC=C awk -F '\t' -v AUR_URL="$AUR_LOCATION/packages" -v colorize="$1" '
+    BEGIN {
+        # libmakepkg escape sequences start in \e and cannot be used here
+        if (colorize) {
+            BOLD    = "\033[1m"
+            ALL_OFF = "\033[0m"
+            RED     = BOLD "\033[31m"
+            GREEN   = BOLD "\033[32m"
+            YELLOW  = BOLD "\033[33m"
+            BLUE    = BOLD "\033[34m"
+            OSC8    = "\033]8"
+            ST      = "\033\\"
+        } else {
+            BOLD=""; ALL_OFF=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; OSC8=""; ST=""
+        }
+    } {
+        # Name Version Description Maintainer NumVotes Popularity OutOfDate
+        name = $1; ver = $2; desc = $3; mnt = $4; votes = $5; pop = $6; ood = $7
 
-    while IFS=$'\t' read -r Name Version Description Maintainer NumVotes Popularity OutOfDate; do
-        (( count++ ))
+        ood == "-" ?
+            ood = "" :
+            ood = strftime("(Out-of-date: %d %B %Y)", ood)
 
-        case $OutOfDate in
-            -) unset OutOfDate ;;
-            *) printf -v OutOfDate '(Out-of-date: %(%d %B %Y)T)' "$OutOfDate"
-        esac
+        mnt == "-" ?
+            mnt = "(Orphaned) " :
+            mnt = ""
 
-        case $Maintainer in
-            -) Maintainer='(Orphaned) ' ;;
-            *) unset Maintainer ;;
-        esac
+        pop = sprintf("%.2f", $6)
+        pre = sprintf("%saur/%s%s%s", BLUE, ALL_OFF, BOLD, name)
 
-        # Unset LC_ALL to ensure it doesn't override LC_NUMERIC.
-        LC_ALL='' LC_NUMERIC=C printf -v Popularity '%.2f' "$Popularity"
-
-        Url=${AUR_LOCATION}/packages/${Name}
-        Link="$(hyperlink "$Url" "${BLUE}aur/${ALL_OFF}${BOLD}${Name}")"
-
-        printf "%s ${GREEN}%s ${ALL_OFF}(+%s %s%%) ${RED}%s%s${ALL_OFF}\\n    %s\\n" \
-               "$Link" "$Version" "$NumVotes" "$Popularity" "$Maintainer" "$OutOfDate" "$Description"
-    done
-
-    if (( count == 0 )); then
-        return 1
-    fi
+        if (length(OSC8) && length(ST)) {
+            pre = sprintf("%s;;%s%s%s%s;;%s", OSC8, AUR_URL "/" name, ST, pre, OSC8, ST)
+        }
+        printf("%s %s%s %s(+%s %s%%) %s%s%s%s\n", pre, GREEN, ver, ALL_OFF, votes, pop, mnt, RED, ood, ALL_OFF)
+        printf("    %s\n", desc)
+    }
+    END {
+        if (NR == 0)
+            exit(1)
+    }'
 }
 
 # noop formatter which returns 1 if no lines were processed
@@ -84,7 +108,6 @@ info_noop() {
     awk '{ print } END { if (NR == 0) exit(1); }'
 }
 
-source /usr/share/makepkg/util/message.sh
 source /usr/share/makepkg/util/parseopts.sh
 
 opt_short='f:k:adimnqrsv'
@@ -150,12 +173,13 @@ done
 # connected to a terminal, e.g. when piping to less -R. (#585) When printing to
 # a file, they should be disabled instead. Default to `--color=auto` but allow
 # specifying other modes.
+colorize=0
 if [[ ! -v NO_COLOR ]] && [[ ! -v AUR_DEBUG ]]; then
     if [[ $color == 'auto' ]]; then
-        [[ -t 1 ]] && colorize
+        [[ -t 1 ]] && colorize=1
 
     elif [[ $color == 'always' ]]; then
-        colorize
+        colorize=1
 
     elif [[ $color != 'none' ]]; then
         printf >&2 '%s: invalid --color mode\n' "$argv0"
@@ -187,10 +211,10 @@ format_args+=(-k "$sort_key")
 case $format in
     short) 
         format_args+=(-f '%n\t%v\t%d\t%m\t%w\t%p\t%o\n')
-        info() { info_short; } ;;
+        info() { info_short "$colorize"; } ;;
     long) 
         format_args+=(-f '%n\t%b\t%v\t%d\t%U\t%K\t%e\t%m\t%w\t%p\t%o\t%S\t%L\t%D\t%M\t%c\t%O\t%C\t%P\n')
-        info() { info_long; } ;;
+        info() { info_long  "$colorize"; } ;;
     custom)
         format_args+=(-f "$format_str")
         info() { info_noop; } ;;
