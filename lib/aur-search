@@ -226,24 +226,19 @@ case $format in
         info() { info_noop; } ;;
 esac
 
-# input filters
-case $mode in
-    query)
-        gen() { aur query -t "$type" -b "$search_by" "$@"; } ;;
-    stdin)
-        gen() { tee; } ;;
-esac
+if [[ $mode == 'query' ]]; then
+    aur query -t "$type" -b "$search_by" "$@" | aur format "${format_args[@]}" -v | info
+    pstate=("${PIPESTATUS[@]}")
 
-# pipeline
-gen "$@" | aur format "${format_args[@]}" -v | info
-pstate=("${PIPESTATUS[@]}")
+    if (( pstate[0] )) || (( pstate[1] )); then
+        exit 2 # aur-query or aurweb response error
 
-if (( pstate[0] )) || (( pstate[1] )); then
-    exit 2 # aur-query or aurweb response error
+    elif (( pstate[2] )); then
+        exit 1 # no results found
+    fi
 
-elif (( pstate[2] )); then
-    exit 1 # no results found
+elif [[ $mode == 'stdin' ]]; then
+    info
 fi
-exit 0
 
 # vim: set et sw=4 sts=4 ft=sh:
