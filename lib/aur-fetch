@@ -46,14 +46,14 @@ usage() {
 ICAgICAgICAgICAgIC4tLX5+LF9fCjotLi4uLiwtLS0tLS0tYH5+Jy5fLicKIGAtLCwsICAs
 XyAgICAgIDsnflUnCiAgXywtJyAsJ2AtX187ICctLS4KIChfLyd+fiAgICAgICcnJycoOwoK
 !
-    printf >&2 'usage: %s [-r] [--rebase|--reset|--fetch-only] [--] pkgname...\n' "$argv0"
+    printf >&2 'usage: %s [-Sefr] [--rebase|--reset|--merge] [--] pkgname...\n' "$argv0"
     exit 1
 }
 
 # option handling
 source /usr/share/makepkg/util/parseopts.sh
 
-opt_short='frS'
+opt_short='efrS'
 opt_long=('auto' 'merge' 'reset' 'rebase' 'discard' 'existing' 'results:' 'ff'
           'ff-only' 'no-ff' 'no-commit' 'recurse')
 opt_hidden=('dump-options' 'sync:')
@@ -71,7 +71,7 @@ while true; do
             sync=auto ;;
         -f|--discard)
             discard=1 ;;
-        --existing)
+        -e|--existing)
             existing=1 ;;
         --merge)
             sync=merge ;;
