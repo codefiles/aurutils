@@ -30,16 +30,6 @@ lib32() {
     }' "$@"
 }
 
-split_pkgspec() {
-    awk -F'/' '{
-        if (NF == 2) {
-            printf("%s\t%s\n", $1, $2)
-        } else {
-            printf("-\t%s\n", $1)
-        }
-    }' "$@"
-}
-
 # argv[1]: $1 pkgname $2 depends $3 pkgbase
 # note: edges are not checked for duplicates
 select_pkgbase() {
@@ -62,6 +52,16 @@ select_ignores() {
     !($1 in map) {
         print
     }' "$@"
+}
+
+select_ignores_pkgspec() {
+    awk -F'/' -v needle="$1" '{
+        if (NF == 2 && $1 == needle) {
+            print $2
+        } else {
+            print $1
+        }
+    }' "${@:2}"
 }
 
 # argv[1]: $1 pkgname $2 depends[<>=]
@@ -282,16 +282,11 @@ fi
 # Concatenate ignores from file and command-line arguments
 : "${ignore_file=$XDG_CONFIG_HOME/aurutils/sync/ignore}"
 
+# Restrict ignores to local repository with a single pass (#880)
 { if [[ -r $ignore_file ]] && [[ ! -d $ignore_file ]]; then
-      # Restrict ignores to local repository with single pass (#880)
-      while IFS=$'\t' read -r repo pkg; do
-          [[ $repo == "$db_name" || $repo == "-" ]] && pkg_i+=("$pkg")
-      done < <(split_pkgspec "$ignore_file")
+      select_ignores_pkgspec "$db_name" "$ignore_file"
   fi
-
-  if (( ${#pkg_i[@]} )); then
-      printf '%s\n' "${pkg_i[@]}"
-  fi
+  (( ${#pkg_i[@]} )) && printf '%s\n' "${pkg_i[@]}"
 } | complement <(printf '%s\n' "$@") >igni
 
 if [[ -s igni ]]; then
