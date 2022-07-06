@@ -106,12 +106,13 @@ fi
 
 opt_short='d:D:k:U:AcfLnorRSTuv'
 opt_long=('bind:' 'bind-rw:' 'database:' 'directory:' 'ignore:' 'root:'
-          'makepkg-conf:' 'pacman-conf:' 'chroot' 'continue' 'force' 'ignore-arch'
-          'log' 'no-confirm' 'no-ver' 'no-graph' 'no-ver-argv' 'no-view'
-          'no-provides' 'no-build' 'rmdeps' 'sign' 'temp' 'upgrades' 'pkgver'
-          'rebuild' 'rebuild-tree' 'rebuild-all' 'ignore-file:' 'remove'
-          'provides-from:' 'new' 'prevent-downgrade' 'verify' 'makepkg-args:'
-          'format:' 'no-check' 'keep-going:' 'user:' 'rebase' 'reset' 'ff')
+          'makepkg-conf:' 'pacman-conf:' 'chroot' 'continue' 'force'
+          'ignore-arch' 'log' 'no-confirm' 'no-ver' 'no-graph' 'no-ver-argv'
+          'no-view' 'no-provides' 'no-build' 'rmdeps' 'sign' 'temp' 'upgrades'
+          'pkgver' 'rebuild' 'rebuild-tree' 'rebuild-all' 'ignore-file:'
+          'remove' 'provides-from:' 'new' 'prevent-downgrade' 'verify'
+          'makepkg-args:' 'format:' 'no-check' 'keep-going:' 'user:'
+          'rebase' 'reset' 'ff')
 opt_hidden=('dump-options' 'allan' 'ignorearch' 'ignorefile:' 'noconfirm'
             'nover' 'nograph' 'nover-argv' 'noview' 'noprovides' 'nobuild'
             'rebuildall' 'rebuildtree' 'rm-deps' 'gpg-sign' 'margs:' 'nocheck'
