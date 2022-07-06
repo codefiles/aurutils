@@ -6,6 +6,7 @@ argv0=sync
 XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}
 AURDEST=${AURDEST:-$XDG_CACHE_HOME/aurutils/$argv0}
 AUR_SYNC_USE_NINJA=${AUR_SYNC_USE_NINJA:-0}
 PS4='+(${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
@@ -420,8 +421,8 @@ fi
 # Build dependency tree with ninja (#908)
 if (( AUR_SYNC_USE_NINJA )); then
     # directory for stamp files (concurrent aur-sync processes)
-    # XXX: better way to disambiguate (e.g date, uuid)
-    build_dir=ninja-$USER-$$
+    mkdir -p "$XDG_RUNTIME_DIR"/aurutils
+    build_dir=$XDG_RUNTIME_DIR/aurutils/ninja-$USER-$$
     mkdir "$build_dir"
 
     # generate build.ninja
