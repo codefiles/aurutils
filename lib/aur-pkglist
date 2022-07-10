@@ -72,7 +72,7 @@ while true; do
         -S) printf >&2 'deprecation notice: %s -S is an alias for --search\n' "$argv0"
             pkglist=packages-meta-v1.json ;;
         -J|--json)
-            printf >&2 'deprecation notice: %s --json is an alias for --info | jq\n' "$argv0"
+            printf >&2 'deprecation notice: %s --json is an alias for [--info|--search] | jq\n' "$argv0"
             mode=plain ;;
         --dump-options)
             printf -- '--%s\n' "${opt_long[@]}" ${AUR_DEBUG+"${opt_hidden[@]}"}
