@@ -152,7 +152,6 @@ elif [[ $mode == "path" ]]; then
     exit 0
 elif [[ $mode == "status" ]] && [[ -v status_file ]]; then
     printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path" >"$status_file"
-    exit 0
 elif [[ $mode == "status" ]]; then
     printf 'repo:%s\nroot:%s\npath:%s\n' "$db_name" "$db_root" "$db_path"
     exit 0
