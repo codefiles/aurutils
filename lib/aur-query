@@ -76,10 +76,10 @@ for my $form (@forms) {
     } else {
         my $child_pid = open(my $fh, "-|", @cmd) or die $!;
 
-        if ($child_pid) {  # parent process
-            while (my $row = <$fh>) {
-                say $row;  # do stuff with line
-            }   
+        if ($child_pid) { # parent process
+            say <$fh>;
+            die "$argv0: response error (multi-line output)" if defined(<$fh>);
+
             waitpid($child_pid, 0);
         }
         # Return a generic error code on `curl` failure, to avoid overlap with
